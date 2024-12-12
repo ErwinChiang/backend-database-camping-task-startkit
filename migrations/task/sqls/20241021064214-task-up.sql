@@ -114,16 +114,80 @@ LIMIT 3;
 --    █ █   █████ █   █    █████ 
 -- ===================== ====================
 -- 2. 組合包方案 CREDIT_PACKAGE、客戶購買課程堂數 CREDIT_PURCHASE
+-- 建立新增課程的 SP
+CREATE OR REPLACE PROCEDURE ADD_CREDIT_PACKAGE(
+    IN P_NAME VARCHAR(50),
+    IN P_PRICE NUMERIC(10,2),
+    IN P_CREDIT_AMOUNT INTEGER,
+    IN P_CREATED_AT TIMESTAMP DEFAULT (CURRENT_TIMESTAMP)
+)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    -- 檢查課程是否已存在
+    IF EXISTS (SELECT 1 FROM "CREDIT_PACKAGE" WHERE "name" = P_NAME) THEN
+        RAISE NOTICE '課程已存在: %', P_NAME;
+    ELSE
+        -- 插入新的課程
+        INSERT INTO "CREDIT_PACKAGE" (name, credit_amount, price, created_at)
+        VALUES (P_NAME, P_CREDIT_AMOUNT, P_PRICE, P_CREATED_AT);
+        RAISE NOTICE '建立課程: % 堂數: %, 價格: %', P_NAME, P_CREDIT_AMOUNT, P_PRICE;
+    END IF;
+END;
+$$;
+-- 建立購買課程的 SP
+CREATE OR REPLACE PROCEDURE ADD_CREDIT_PURCHASE_PACKAGE_BY_USER_NAME(
+    IN P_USER_NAME VARCHAR(50),
+    IN P_CREDIT_PACKAGE_NAME VARCHAR(50),
+    IN P_PURCHASE_AT TIMESTAMP DEFAULT (CURRENT_TIMESTAMP)
+)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_user_id uuid;
+    v_credit_package_id INTEGER;
+    v_purchased_credits INTEGER;
+    v_price_paid INTEGER;
+BEGIN
+    -- 判斷課堂是否存在
+    IF EXISTS(SELECT name, COUNT(*) FROM "CREDIT_PACKAGE" WHERE name = P_CREDIT_PACKAGE_NAME GROUP BY name HAVING COUNT(*) !=1) THEN
+        RAISE NOTICE '不存在課堂，或存在多個相同課堂: %, 請使用課堂編號查詢', P_CREDIT_PACKAGE_NAME;
+        RETURN;
+    END IF;
+    
+    IF EXISTS(SELECT name, COUNT(*) FROM "USER" WHERE name = P_USER_NAME GROUP BY name HAVING COUNT(*) != 1) THEN
+        RAISE NOTICE '使用者名稱不存在，或存在多位相同使用者: %, 請使用 email 查詢', P_USER_NAME;
+        RETURN;
+    ELSE
+        SELECT id INTO v_user_id FROM "USER" WHERE name = P_USER_NAME;
+    END IF;
+    
+    -- 獲取 credit_package_id, purchased_credits 和 price_paid
+    SELECT id, credit_amount, price INTO v_credit_package_id, v_purchased_credits, v_price_paid
+    FROM "CREDIT_PACKAGE" WHERE name = P_CREDIT_PACKAGE_NAME;
+    
+    -- 新增購買資料
+    INSERT INTO "CREDIT_PURCHASE" (user_id, credit_package_id, purchased_credits, price_paid, purchase_at)
+    VALUES (v_user_id, v_credit_package_id, v_purchased_credits, v_price_paid, P_PURCHASE_AT);
+    
+    -- 顯示購買資訊
+    RAISE NOTICE '%(%) => 已購買課堂: %(%) 金額: % 堂數: %', P_USER_NAME, v_user_id, P_CREDIT_PACKAGE_NAME, v_credit_package_id, v_price_paid, v_purchased_credits;
+END;
+$$;
 -- 2-1. 新增：在`CREDIT_PACKAGE` 資料表新增三筆資料，資料需求如下：
     -- 1. 名稱為 `7 堂組合包方案`，價格為`1,400` 元，堂數為`7`
     -- 2. 名稱為`14 堂組合包方案`，價格為`2,520` 元，堂數為`14`
     -- 3. 名稱為 `21 堂組合包方案`，價格為`4,800` 元，堂數為`21`
-
+CALL ADD_CREDIT_PACKAGE('7 堂組合包方案',1400::numeric, 7);
+CALL ADD_CREDIT_PACKAGE('14 堂組合包方案',2520::numeric, 14);
+CALL ADD_CREDIT_PACKAGE('21 堂組合包方案',4800::numeric, 21);
 -- 2-2. 新增：在 `CREDIT_PURCHASE` 資料表，新增三筆資料：（請使用 name 欄位做子查詢）
     -- 1. `王小明` 購買 `14 堂組合包方案`
     -- 2. `王小明` 購買 `21 堂組合包方案`
     -- 3. `好野人` 購買 `14 堂組合包方案`
-
+CALL ADD_CREDIT_PURCHASE_PACKAGE_by_user_name('王小明','14 堂組合包方案', '2024-01-01'::TIMESTAMP);
+CALL ADD_CREDIT_PURCHASE_PACKAGE_by_user_name('王小明','21 堂組合包方案', '2024-02-01'::TIMESTAMP);
+CALL ADD_CREDIT_PURCHASE_PACKAGE_by_user_name('好野人','14 堂組合包方案', '2024-09-01'::TIMESTAMP);
 
 -- ████████  █████   █    ████   
 --   █ █   ██    █  █         ██ 
