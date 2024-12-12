@@ -371,7 +371,89 @@ CALL DELETE_SKILL_BY_NAME ('空中瑜伽');
 --    █ █   █████ █   █        █ 
 -- ===================== ==================== 
 -- 4. 課程管理 COURSE 、組合包方案 CREDIT_PACKAGE
-
+-- 增加課程的 SP
+CREATE
+OR REPLACE PROCEDURE ADD_COURSE_BY_COACH_EMAIL (
+    IN P_EMAIL VARCHAR(50),
+    IN P_SKILL_NAME VARCHAR(50),
+    IN P_COURSE_NAME VARCHAR(100),
+    IN P_COURSE_DESCRIPTION TEXT,
+    IN P_START_AT TIMESTAMP,
+    IN P_END_AT TIMESTAMP,
+    IN P_MAX_PARTICIPANTS INTEGER,
+    IN P_MEETING_URL VARCHAR(2048),
+    IN P_INTERVAL_MINUTES INTEGER
+) LANGUAGE PLPGSQL AS $$
+DECLARE
+    v_coach_id uuid;
+    v_user_id uuid;
+    v_coach_name varchar(50);
+    v_skill_id uuid;
+    v_interval interval;
+BEGIN
+    -- 將 P_INTERVAL_MINUTES 轉換為 INTERVAL 類型, 若為NULL 則為30
+    v_interval := (COALESCE(P_INTERVAL_MINUTES,30) || ' minutes')::INTERVAL;
+    
+    -- 檢查 ROLE 為教練的email 是否存在
+    IF EXISTS (SELECT 1 FROM "USER" WHERE LOWER(email) = LOWER(P_EMAIL) AND role = 'COACH') THEN
+        -- 取得教練id 與 教練姓名
+        SELECT
+            "USER".id,
+            "USER".name,
+            "COACH".id
+        INTO v_user_id, v_coach_name, v_coach_id
+        FROM "USER"
+        LEFT JOIN "COACH" ON "COACH".user_id = "USER".id AND "USER".role = 'COACH'
+        WHERE LOWER("USER".email) = LOWER(P_EMAIL);
+        RAISE NOTICE '教練: % (%)', v_coach_name,P_EMAIL;
+    ELSE
+        RAISE NOTICE '教練: % 不存在.', P_EMAIL;
+        RETURN;
+    END IF;
+    
+    --檢查SKILL_NAME 是否存在
+    IF EXISTS (SELECT 1 FROM "SKILL" WHERE LOWER(name) = LOWER(P_SKILL_NAME)) THEN
+        SELECT "id" INTO v_skill_id FROM "SKILL" WHERE LOWER(name) = LOWER(P_SKILL_NAME);
+    ELSE
+        RAISE NOTICE '技能: % 不存在.', P_SKILL_NAME;
+        RETURN;
+    END IF;
+    
+    -- 檢查教練是否擁有該技能
+    IF EXISTS (SELECT 1 FROM "COACH_LINK_SKILL"
+               LEFT JOIN "SKILL" ON "COACH_LINK_SKILL".skill_id = "SKILL".id
+               WHERE "COACH_LINK_SKILL".coach_id = v_coach_id AND "SKILL".name = P_SKILL_NAME) THEN
+        --該教練已擁有該技能
+        RAISE NOTICE '教練: % (%) 已存在技能: %', v_coach_name, P_EMAIL, P_SKILL_NAME;
+    ELSE
+        --教練不會這個
+        RAISE NOTICE '教練: % (%) 還沒學會: %，請教練取得相關技能', v_coach_name, P_EMAIL, P_SKILL_NAME;
+        RETURN;
+    END IF;
+    
+    -- 防止課程結束早於課程起始
+    IF (P_START_AT + v_interval) > P_END_AT THEN
+        RAISE NOTICE '開課時間不合理: 開始: % 結束: %', P_START_AT, P_END_AT;
+        RETURN;
+    END IF;
+    
+    -- 防血汗以及分身檢查, 同一教練在 START_AT 與 END_AT 的時間內是否有重疊的課程, 或間隔小於 P_INTERVAL_MINUTES 分鐘
+    IF EXISTS (SELECT 1 FROM "COURSE"
+               WHERE user_id = v_user_id
+               AND ((P_START_AT BETWEEN start_at AND end_at + v_interval)
+                    OR (P_END_AT BETWEEN start_at AND end_at + v_interval)
+                    OR (start_at BETWEEN P_START_AT AND P_END_AT + v_interval)
+                    OR (end_at BETWEEN P_START_AT AND P_END_AT + v_interval))) THEN
+        RAISE NOTICE '太血汗了!!!! 教練: % (%)，該時段已安排課程或課程間距小於 % 分鐘', v_coach_name, P_EMAIL, COALESCE(P_INTERVAL_MINUTES,30);
+        RETURN;
+    END IF;
+    
+    -- 新增開課
+    INSERT INTO "COURSE" (user_id, skill_id, name, description, start_at, end_at, max_participants, meeting_url)
+    VALUES(v_user_id, v_skill_id, P_COURSE_NAME, P_COURSE_DESCRIPTION, P_START_AT, P_END_AT, P_MAX_PARTICIPANTS, P_MEETING_URL);
+    RAISE NOTICE '新增課程: % (技能: %), 教練: %, 開始於: %, 結束於: %, 開班允許人數: %, 授課連結: %, 課程簡介: %', P_COURSE_NAME, P_SKILL_NAME, v_coach_name, P_START_AT, P_END_AT, P_MAX_PARTICIPANTS, P_MEETING_URL, P_COURSE_DESCRIPTION;
+END;
+$$;
 -- 4-1. 新增：在`COURSE` 新增一門課程，資料需求如下：
     -- 1. 教練設定為用戶`李燕容` 
     -- 2. 在課程專長 `skill_id` 上設定為「 `重訓` 」
@@ -380,7 +462,8 @@ CALL DELETE_SKILL_BY_NAME ('空中瑜伽');
     -- 5. 授課結束時間`end_at`設定為2024-11-25 16:00:00
     -- 6. 最大授課人數`max_participants` 設定為10
     -- 7. 授課連結設定`meeting_url`為 https://test-meeting.test.io
-
+CALL ADD_COURSE_BY_COACH_EMAIL('lee2000@hexschooltest.io', '重訓', '重訓基礎課', NULL, '2024-11-25 14:00:00', '2024-11-25 16:00:00', 10, 'https://test-meeting.test.io', 30);
+CALL ADD_COURSE_BY_COACH_EMAIL('lee2000@hexschooltest.io', '重訓', '重訓基礎課', NULL, '2024-11-26 14:00:00', '2024-11-26 16:00:00', 10, 'https://test-meeting.test.io', 30);
 
 -- ████████  █████   █    █████ 
 --   █ █   ██    █  █     █     
