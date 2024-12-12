@@ -512,13 +512,13 @@ BEGIN
     END IF;
     
     --檢查是否已預約
-    IF EXISTS (SELECT 1 FROM "COURSE_BOOKING" WHERE user_id = v_user_id and course_id = v_course_id and booking_at IS NOT NULL and cancel_at IS NULL) THEN
+    IF EXISTS (SELECT 1 FROM "COURSE_BOOKING" WHERE user_id = v_user_id and course_id = v_course_id and booking_at IS NOT NULL and cancelled_at IS NULL) THEN
         RAISE NOTICE '% => 該課程已預約, 教練: % 課程: % 課程時間: %', v_user_name, P_COACH_NAME, v_course_name, P_COURSE_START_AT;
         RETURN;
     END IF;
     
     -- 新增預約
-    INSERT INTO "COURSE_BOOKING" (user_id, course_id, booking_at, status, join_at, leave_at, cancel_at, cancellation_reason)
+    INSERT INTO "COURSE_BOOKING" (user_id, course_id, booking_at, status, join_at, leave_at, cancelled_at, cancellation_reason)
     VALUES(v_user_id, v_course_id, P_BOOKING_AT, '即將授課', NULL, NULL, NULL, NULL);
     RAISE NOTICE '% => 預約課程成功: % 開始於: % 教練: % 預約成功時間: %',v_user_name, v_course_name, P_COURSE_START_AT, P_COACH_NAME, P_BOOKING_AT;
 END;
@@ -530,7 +530,7 @@ OR REPLACE PROCEDURE CANCEL_COURSE_BOOKING_BY_USER_EMAIL (
     IN P_COACH_NAME VARCHAR(50),
     IN P_COURSE_NAME VARCHAR(100),
     IN P_COURSE_START_AT TIMESTAMP,
-    IN P_CANCEL_AT TIMESTAMP,
+    IN P_cancelled_at TIMESTAMP,
     IN P_CANCELLATION_REASON VARCHAR(255)
 ) LANGUAGE PLPGSQL AS $$
 DECLARE
@@ -563,7 +563,7 @@ BEGIN
     END IF;
     
     --檢查是否已預約
-    IF NOT EXISTS (SELECT 1 FROM "COURSE_BOOKING" WHERE user_id = v_user_id and course_id = v_course_id and booking_at IS NOT NULL and cancel_at IS NULL) THEN
+    IF NOT EXISTS (SELECT 1 FROM "COURSE_BOOKING" WHERE user_id = v_user_id and course_id = v_course_id and booking_at IS NOT NULL and cancelled_at IS NULL) THEN
         RAISE NOTICE '% => 尚未預約課程, 教練: % 課程: % 課程時間: %', v_user_name, P_COACH_NAME, v_course_name, P_COURSE_START_AT;
         RETURN;
     END IF;
@@ -576,10 +576,10 @@ BEGIN
     
     UPDATE "COURSE_BOOKING"
     SET status = '課程已取消',
-        cancel_at = P_CANCEL_AT,
+        cancelled_at = P_cancelled_at,
         cancellation_reason = P_CANCELLATION_REASON
     WHERE user_id = v_user_id and course_id = v_course_id and booking_at IS NOT NULL AND status IN ('即將授課');
-    RAISE NOTICE '% => 已取消預約: % 開始於: % 教練: % 取消時間: % 取消原因: %',v_user_name, v_course_name, P_COURSE_START_AT, P_COACH_NAME, P_CANCEL_AT, P_CANCELLATION_REASON;
+    RAISE NOTICE '% => 已取消預約: % 開始於: % 教練: % 取消時間: % 取消原因: %',v_user_name, v_course_name, P_COURSE_START_AT, P_COACH_NAME, P_cancelled_at, P_CANCELLATION_REASON;
 END;
 $$;
 -- 增加進入課程的 SP
@@ -625,7 +625,7 @@ BEGIN
     END IF;
     
     --檢查是否已預約
-    IF NOT EXISTS (SELECT 1 FROM "COURSE_BOOKING" WHERE user_id = v_user_id and course_id = v_course_id and booking_at IS NOT NULL and cancel_at IS NULL) THEN
+    IF NOT EXISTS (SELECT 1 FROM "COURSE_BOOKING" WHERE user_id = v_user_id and course_id = v_course_id and booking_at IS NOT NULL and cancelled_at IS NULL) THEN
         RAISE NOTICE '尚未預約課程, 教練: % 課程: % 課程時間: %', P_COACH_NAME, v_course_name, P_COURSE_START_AT;
         RETURN;
     END IF;
@@ -648,7 +648,7 @@ BEGIN
         join_at = P_JOIN_AT
     WHERE user_id = v_user_id and course_id = v_course_id
       and booking_at IS NOT NULL
-      and cancel_at IS NULL
+      and cancelled_at IS NULL
       and join_at IS NULL;
     RAISE NOTICE '% => 上課中: % 開始於: % 教練: %',v_user_name, P_JOIN_AT, P_COURSE_START_AT, P_COACH_NAME;
 END;
@@ -696,7 +696,7 @@ CREATE OR REPLACE FUNCTION GET_COURSES_BOOKING_BY_USER_EMAIL(
     status VARCHAR(20),
     join_at TIMESTAMP,
     leave_at TIMESTAMP,
-    cancel_at TIMESTAMP,
+    cancelled_at TIMESTAMP,
     cancellation_reason VARCHAR
 ) AS $$
 BEGIN
@@ -710,7 +710,7 @@ SELECT
     "COURSE_BOOKING".status,
     "COURSE_BOOKING".join_at,
     "COURSE_BOOKING".leave_at,
-    "COURSE_BOOKING".cancel_at,
+    "COURSE_BOOKING".cancelled_at,
     "COURSE_BOOKING".cancellation_reason
 FROM "USER"
 LEFT JOIN "COURSE_BOOKING" ON "USER".id = "COURSE_BOOKING".user_id
@@ -750,7 +750,7 @@ SELECT "USER".id as user_id, "USER".name, COUNT(1)::INTEGER as used_credit_total
 FROM "USER"
 JOIN "COURSE_BOOKING"
 ON "COURSE_BOOKING".user_id = "USER".id
-AND "COURSE_BOOKING".cancel_at IS NULL
+AND "COURSE_BOOKING".cancelled_at IS NULL
 WHERE "USER".email = P_USER_EMAIL OR P_USER_EMAIL IS NULL
 GROUP BY "USER".id, "USER".name;
 END;
@@ -833,17 +833,124 @@ SELECT * FROM GET_REMAINING_CREDITS_BY_USER_EMAIL('wXlTq@hexschooltest.io');
 --   █ █   █████ █   █     ███  
 -- ===================== ====================
 -- 6. 後台報表
+-- 建立取得教練資料的function
+CREATE OR REPLACE FUNCTION GET_COACH_ORDER_BY_EXPERIENCE_YEARS()
+RETURNS TABLE (
+    "教練名稱" varchar(50),
+    "經驗年數" integer,
+    "專長名稱" text,
+    "技能數量" bigint
+) AS $$
+BEGIN
+RETURN QUERY
+SELECT
+    "USER".NAME AS "教練名稱",
+    "COACH".experience_years AS "經驗年數",
+    STRING_AGG("SKILL".name, ';') AS "專長名稱",
+    COUNT("SKILL".name) AS "技能數量"
+FROM "COACH"
+INNER JOIN "USER" ON "USER".role = 'COACH'
+AND "USER".id = "COACH".user_id
+LEFT JOIN "COACH_LINK_SKILL" ON "COACH_LINK_SKILL".coach_id = "COACH".id
+LEFT JOIN "SKILL" ON "SKILL".id = "COACH_LINK_SKILL".skill_id
+GROUP BY "USER".id, "COACH".experience_years
+ORDER BY "COACH".experience_years;
+END;
+$$ LANGUAGE plpgsql;
+-- 建立取得銷售紀錄資料的function
+CREATE OR REPLACE FUNCTION REPORT_CREDIT_PACKAGE_PURCHASE_BY_TIMESTAMP(
+    P_START_AT TIMESTAMP DEFAULT NULL,
+    P_END_AT TIMESTAMP DEFAULT NULL
+)
+RETURNS TABLE (
+    "月份" VARCHAR(10),
+    "組合包方案名稱" VARCHAR(50),
+    "銷售數量" INTEGER,
+    "銷售金額" NUMERIC(10,2)
+) AS $$
+DECLARE
+    v_start_at TIMESTAMP;
+    v_end_at TIMESTAMP;
+BEGIN
+-- 設定 v_start_at 和 v_end_at 的值
+    v_start_at := COALESCE(P_START_AT, DATE_TRUNC('month', CURRENT_DATE));
+    v_end_at := COALESCE(P_END_AT, DATE_TRUNC('month', CURRENT_DATE) + INTERVAL '1 month - 1 day');
+RETURN QUERY
+SELECT
+    TO_CHAR(DATE_TRUNC('month', cpc.purchase_at), 'YYYY-MM')::VARCHAR(10) AS "月份",
+    CPK.name AS "組合包方案名稱",
+    COUNT(CPK.name)::INTEGER AS "銷售數量",
+    SUM(CPK.price)::NUMERIC(10,2) AS "銷售金額"
+FROM "CREDIT_PURCHASE" AS CPC
+LEFT JOIN "CREDIT_PACKAGE" AS CPK ON CPK.id = CPC.credit_package_id
+WHERE cpc.purchase_at BETWEEN v_start_at AND v_end_at
+GROUP BY 月份, CPK.name
+ORDER BY 月份;
+END;
+$$ LANGUAGE plpgsql;
+-- 建立以使用者預約課程狀態的function
+CREATE OR REPLACE FUNCTION REPORT_USER_COURSE_BOOKING_STATUS_BY_TIMESTAMP(
+    P_START_AT TIMESTAMP DEFAULT NULL,
+    P_END_AT TIMESTAMP DEFAULT NULL
+)
+RETURNS TABLE (
+    "月份" VARCHAR(10),
+    "會員名稱" VARCHAR(50),
+    "預約狀態" VARCHAR(20),
+    "次數" INTEGER
+) AS $$
+DECLARE
+    v_start_at TIMESTAMP;
+    v_end_at TIMESTAMP;
+BEGIN
+-- 設定 v_start_at 和 v_end_at 的值
+    v_start_at := COALESCE(P_START_AT, DATE_TRUNC('month', CURRENT_DATE));
+    v_end_at := COALESCE(P_END_AT, DATE_TRUNC('month', CURRENT_DATE) + INTERVAL '1 month - 1 day');
+RETURN QUERY
+SELECT
+    TO_CHAR(DATE_TRUNC('month', CB.created_at), 'YYYY-MM')::VARCHAR(10) AS "月份",
+    U.name AS "會員名稱",
+    CB.Status AS "預約狀態",
+    COUNT(CB.Status)::INTEGER AS "次數"
+FROM "COURSE_BOOKING" AS CB
+LEFT JOIN "USER" AS U ON U.id = CB.user_id
+LEFT JOIN GET_REMAINING_CREDITS_BY_USER_EMAIL() AS F ON F.user_id = U.id
+WHERE CB.created_at BETWEEN v_start_at AND v_end_at
+GROUP BY "月份", U.id, CB.Status, F.remaining_credit
+ORDER BY "月份";
+END;
+$$ LANGUAGE plpgsql;
 -- 6-1 查詢：查詢專長為重訓的教練，並按經驗年數排序，由資深到資淺（需使用 inner join 與 order by 語法)
 -- 顯示須包含以下欄位： 教練名稱 , 經驗年數, 專長名稱
-
+SELECT * FROM GET_COACH_ORDER_BY_EXPERIENCE_YEARS();
 -- 6-2 查詢：查詢每種專長的教練數量，並只列出教練數量最多的專長（需使用 group by, inner join 與 order by 與 limit 語法）
 -- 顯示須包含以下欄位： 專長名稱, coach_total
-
+SELECT * FROM GET_COACH_ORDER_BY_EXPERIENCE_YEARS()
+ORDER By "技能數量" DESC
+LIMIT 1;
 -- 6-3. 查詢：計算 11 月份組合包方案的銷售數量
 -- 顯示須包含以下欄位： 組合包方案名稱, 銷售數量
 
+--前面的購買日期已經是12月了, 乾脆拉了全年度
+SELECT * FROM REPORT_CREDIT_PACKAGE_PURCHASE_BY_TIMESTAMP('2024-01-01', '2024-12-31');
 -- 6-4. 查詢：計算 11 月份總營收（使用 purchase_at 欄位統計）
 -- 顯示須包含以下欄位： 總營收
+SELECT
+	"月份",
+	SUM("銷售數量") AS "總銷售數量",
+	SUM("銷售金額") AS "總營收"
+FROM REPORT_CREDIT_PACKAGE_PURCHASE_BY_TIMESTAMP('2024-01-01', '2024-12-31')
+GROUP BY 月份
+ORDER BY 月份;
 
 -- 6-5. 查詢：計算 11 月份有預約課程的會員人數（需使用 Distinct，並用 created_at 和 status 欄位統計）
 -- 顯示須包含以下欄位： 預約會員人數
+SELECT
+	COUNT(DISTINCT "會員名稱")::INTEGER AS "預約會員人數"
+FROM REPORT_USER_COURSE_BOOKING_STATUS_BY_TIMESTAMP('2024-11-01','2024-12-31');
+
+-- 查詢全年度的課程預約狀況
+SELECT * FROM REPORT_USER_COURSE_BOOKING_STATUS_BY_TIMESTAMP('2024-01-01','2024-12-31');
+
+-- 查詢當月的課程預約狀況
+SELECT * FROM REPORT_USER_COURSE_BOOKING_STATUS_BY_TIMESTAMP();
