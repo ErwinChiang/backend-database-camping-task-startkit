@@ -196,22 +196,173 @@ CALL ADD_CREDIT_PURCHASE_PACKAGE_by_user_name('好野人','14 堂組合包方案
 --   █ █   █████ █   █    ████   
 -- ===================== ====================
 -- 3. 教練資料 ，資料表為 COACH ,SKILL,COACH_LINK_SKILL
+-- 更新角色為 COACH 的 SP
+CREATE
+OR REPLACE PROCEDURE UPDATE_COACH_BY_USER_EMAIL (
+    IN P_EMAIL VARCHAR(50),
+    IN P_EXPERIENCE_YEARS INTEGER,
+    IN P_DESCRIPTION TEXT,
+    IN P_PROFILE_IMAGE_URL VARCHAR(2048)
+) LANGUAGE PLPGSQL AS $$
+DECLARE
+    v_user_id uuid;
+    v_user_name varchar(50);
+BEGIN
+    -- 檢查 email 是否存在
+    IF EXISTS (SELECT 1 FROM "USER" WHERE LOWER(email) = LOWER(p_email)) THEN
+        -- 取得user_id
+        SELECT id,name INTO v_user_id, v_user_name FROM "USER" WHERE LOWER(email) = LOWER(p_email);
+        
+        -- 更新USER.role 為 COACH
+        UPDATE "USER"
+        SET role = 'COACH'
+        WHERE LOWER(email) = LOWER(p_email);
+        RAISE NOTICE '已更新使用者 %(%) 為COACH.', p_email, v_user_name;
+    ELSE
+        RAISE NOTICE '使用者 % 不存在.', p_email;
+        RETURN;
+    END IF;
+    
+    -- 增加COACH關聯紀錄
+    IF EXISTS (SELECT 1 FROM "COACH" WHERE user_id = v_user_id) THEN
+        RAISE NOTICE '已存在教練資料 %(% - %) .', v_user_id, p_email, v_user_id;
+        UPDATE "COACH"
+        SET experience_years = COALESCE(p_experience_years, 0),
+            description = COALESCE(p_description, '這傢伙沒有什麼值得介紹的'),
+            profile_image_url = COALESCE(p_profile_image_url, '這傢伙見不得人'),
+            updated_at = (CURRENT_TIMESTAMP)
+        WHERE user_id = v_user_id;
+    ELSE
+        INSERT INTO "COACH" (user_id, experience_years, description, profile_image_url)
+        VALUES (v_user_id, COALESCE(p_experience_years, 0), COALESCE(p_description, '這傢伙沒有什麼值得介紹的'), COALESCE(p_profile_image_url, '這傢伙見不得人'));
+    END IF;
+    
+    RAISE NOTICE '教練資料=> 姓名: %(%) 年資: % 介紹: % 頭像連結: %.', v_user_name, p_email, COALESCE(p_experience_years, 0), COALESCE(p_description, '這傢伙沒有什麼值得介紹的'), COALESCE(p_profile_image_url, '這傢伙見不得人');
+END;
+$$;
+
+-- 更新 COACH 的技能
+CREATE
+OR REPLACE PROCEDURE UPDATE_COACH_SKILLS_BY_USER_EMAIL (
+    IN P_EMAIL VARCHAR(50),
+    IN P_SKILL_NAME VARCHAR(50)
+) LANGUAGE PLPGSQL AS $$
+DECLARE
+    v_coach_id uuid;
+    v_user_name varchar(50);
+    v_skill_id uuid;
+BEGIN
+    -- 檢查 ROLE 為教練的email 是否存在
+    IF EXISTS (SELECT 1 FROM "USER" WHERE LOWER(email) = LOWER(P_EMAIL) AND role = 'COACH') THEN
+        -- 取得教練id 與 教練姓名
+        SELECT
+            "COACH".id AS COACH_ID,
+            "USER".name AS USER_NAME
+        INTO v_coach_id, v_user_name
+        FROM "USER"
+        LEFT JOIN "COACH" ON "COACH".user_id = "USER".id AND "USER".role = 'COACH'
+        WHERE LOWER("USER".email) = LOWER(P_EMAIL);
+        
+        --RAISE NOTICE '教練: % (%)', v_user_name,P_EMAIL;
+    ELSE
+        RAISE NOTICE '教練: % 不存在.', P_EMAIL;
+        RETURN;
+    END IF;
+    
+    --檢查SKILL_NAME 是否存在
+    IF EXISTS (SELECT 1 FROM "SKILL" WHERE LOWER(name) = LOWER(P_SKILL_NAME)) THEN
+        SELECT "id" INTO v_skill_id FROM "SKILL" WHERE LOWER(name) = LOWER(P_SKILL_NAME);
+    ELSE
+        RAISE NOTICE '技能: % 不存在.', P_SKILL_NAME;
+        RETURN;
+    END IF;
+    
+    -- 檢查 該教練是否已擁有該技能
+    IF EXISTS (SELECT 1 FROM "COACH_LINK_SKILL"
+               LEFT JOIN "SKILL" ON "COACH_LINK_SKILL".skill_id = "SKILL".id
+               WHERE "COACH_LINK_SKILL".coach_id = v_coach_id AND "SKILL".name = P_SKILL_NAME) THEN
+        --該教練已擁有該技能
+        RAISE NOTICE '教練: % (%) 已存在技能: %', v_user_name, P_EMAIL, P_SKILL_NAME;
+        RETURN;
+    ELSE
+        --增加教練的技能
+        INSERT INTO "COACH_LINK_SKILL" (coach_id, skill_id) VALUES (v_coach_id, v_skill_id);
+        RAISE NOTICE '教練: % (%) 已新增技能: %', v_user_name, P_EMAIL, P_SKILL_NAME;
+    END IF;
+END;
+$$;
+
+-- 新增技能
+CREATE
+OR REPLACE PROCEDURE ADD_SKILL_BY_NAME (IN P_SKILL_NAME VARCHAR(50)) LANGUAGE PLPGSQL AS $$
+BEGIN
+    --檢查SKILL_NAME 是否存在
+    IF EXISTS (SELECT 1 FROM "SKILL" WHERE LOWER(name) = LOWER(P_SKILL_NAME)) THEN
+        RAISE NOTICE '技能: % 已存在', P_SKILL_NAME;
+        RETURN;
+    ELSE
+        --技能不存在，新增技能
+        INSERT INTO "SKILL" (name) VALUES (P_SKILL_NAME);
+        RAISE NOTICE '已新增技能: %', P_SKILL_NAME;
+    END IF;
+END;
+$$;
+
+-- 刪除技能
+CREATE
+OR REPLACE PROCEDURE DELETE_SKILL_BY_NAME (IN P_SKILL_NAME VARCHAR(50)) LANGUAGE PLPGSQL AS $$
+DECLARE
+    v_skill_id uuid;
+BEGIN
+    --檢查SKILL_NAME 是否存在
+    IF EXISTS (SELECT 1 FROM "SKILL" WHERE LOWER(name) = LOWER(P_SKILL_NAME)) THEN
+        SELECT id INTO v_skill_id FROM "SKILL" WHERE LOWER(name) = LOWER(P_SKILL_NAME);
+        RAISE NOTICE '將刪除技能: % (%)', P_SKILL_NAME, v_skill_id;
+    ELSE
+        RAISE NOTICE '不存在技能: %', P_SKILL_NAME;
+        RETURN;
+    END IF;
+    
+    --檢查技能是否存在關聯
+    IF EXISTS (SELECT 1 FROM "COACH_LINK_SKILL" WHERE skill_id = v_skill_id) THEN
+        DELETE FROM "COACH_LINK_SKILL" WHERE skill_id = v_skill_id;
+        RAISE NOTICE '清除教練與技能關聯資料...';
+    END IF;
+    
+    --刪除技能
+    DELETE FROM "SKILL" WHERE LOWER(name) = LOWER(P_SKILL_NAME);
+    RAISE NOTICE '已刪除技能: %', P_SKILL_NAME;
+END;
+$$;
 -- 3-1 新增：在`COACH`資料表新增三筆教練資料，資料需求如下：
     -- 1. 將用戶`李燕容`新增為教練，並且年資設定為2年（提示：使用`李燕容`的email ，取得 `李燕容` 的 `id` ）
     -- 2. 將用戶`肌肉棒子`新增為教練，並且年資設定為2年
     -- 3. 將用戶`Q太郎`新增為教練，並且年資設定為2年
-
+CALL UPDATE_COACH_BY_USER_EMAIL ('lee2000@hexschooltest.io', 2, NULL, NULL);
+CALL UPDATE_COACH_BY_USER_EMAIL ('muscle@hexschooltest.io', 2, NULL, NULL);
+CALL UPDATE_COACH_BY_USER_EMAIL ('starplatinum@hexschooltest.io', 2, NULL, NULL);
 -- 3-2. 新增：承1，為三名教練新增專長資料至 `COACH_LINK_SKILL` ，資料需求如下：
     -- 1. 所有教練都有 `重訓` 專長
     -- 2. 教練`肌肉棒子` 需要有 `瑜伽` 專長
     -- 3. 教練`Q太郎` 需要有 `有氧運動` 與 `復健訓練` 專長
+CALL UPDATE_COACH_SKILLS_BY_USER_EMAIL ('lee2000@hexschooltest.io', '重訓');
+CALL UPDATE_COACH_SKILLS_BY_USER_EMAIL ('lee2000@hexschooltest.io', '瑜伽');
 
+CALL UPDATE_COACH_SKILLS_BY_USER_EMAIL ('muscle@hexschooltest.io', '重訓');
+CALL UPDATE_COACH_SKILLS_BY_USER_EMAIL ('muscle@hexschooltest.io', '瑜伽');
+
+CALL UPDATE_COACH_SKILLS_BY_USER_EMAIL ('starplatinum@hexschooltest.io', '重訓');
+CALL UPDATE_COACH_SKILLS_BY_USER_EMAIL ('starplatinum@hexschooltest.io', '有氧運動');
+CALL UPDATE_COACH_SKILLS_BY_USER_EMAIL ('starplatinum@hexschooltest.io', '復健訓練');
 -- 3-3 修改：更新教練的經驗年數，資料需求如下：
     -- 1. 教練`肌肉棒子` 的經驗年數為3年
     -- 2. 教練`Q太郎` 的經驗年數為5年
+CALL UPDATE_COACH_BY_USER_EMAIL ('muscle@hexschooltest.io', 3, NULL, NULL);
+CALL UPDATE_COACH_BY_USER_EMAIL ('starplatinum@hexschooltest.io', 5, NULL, NULL);
 
 -- 3-4 刪除：新增一個專長 空中瑜伽 至 SKILL 資料表，之後刪除此專長。
-
+CALL ADD_SKILL_BY_NAME ('空中瑜伽');
+CALL DELETE_SKILL_BY_NAME ('空中瑜伽');
 
 --  ████████  █████   █    █   █ 
 --    █ █   ██    █  █     █   █ 
