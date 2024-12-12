@@ -6,7 +6,80 @@
 --   █ █   █████ █   █     █ 
 -- ===================== ====================
 -- 1. 用戶資料，資料表為 USER
-
+-- Task1
+-- 建立新增使用者的 SP
+CREATE OR REPLACE PROCEDURE ADD_USER_WITH_EMAIL_CHECK(
+    IN P_NAME VARCHAR(50),
+    IN P_EMAIL VARCHAR(320),
+    IN P_ROLE VARCHAR(20),
+    IN P_CREATED_AT TIMESTAMP DEFAULT (CURRENT_TIMESTAMP),
+    IN P_UPDATED_AT TIMESTAMP DEFAULT (CURRENT_TIMESTAMP)
+)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    -- 檢查 email 格式是否正確
+    IF LOWER(P_EMAIL) !~ '^[a-zA-Z0-9.!#$%&''''*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$' THEN
+        RAISE EXCEPTION 'EMail 格式不正確: %', P_EMAIL;
+    END IF;
+    
+    -- 檢查 email 是否已存在
+    IF EXISTS (SELECT 1 FROM "USER" WHERE LOWER(email) = LOWER(P_EMAIL)) THEN
+        RAISE NOTICE '使用者已存在: %', P_EMAIL;
+    ELSE
+        -- 插入新使用者資料
+        INSERT INTO "USER" (name, email, role, created_at, updated_at)
+        VALUES (P_NAME, P_EMAIL, P_ROLE, P_CREATED_AT, P_UPDATED_AT);
+    END IF;
+END;
+$$;
+-- 變更使用者資料的 SP - 以 email 判斷
+CREATE OR REPLACE PROCEDURE UPDATE_USER_BY_EMAIL(
+    IN P_EMAIL VARCHAR(320),
+    IN P_NAME VARCHAR(50) DEFAULT NULL,
+    IN P_ROLE VARCHAR(20) DEFAULT NULL,
+    IN P_UPDATED_AT TIMESTAMP DEFAULT NULL
+)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    -- 檢查 email 格式是否正確
+    IF LOWER(P_EMAIL) !~ '^[a-zA-Z0-9.!#$%&''''*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$' THEN
+        RAISE EXCEPTION 'EMail 格式不正確: %', P_EMAIL;
+    END IF;
+    
+    -- 檢查 email 是否存在
+    IF EXISTS (SELECT 1 FROM "USER" WHERE LOWER(email) = LOWER(P_EMAIL)) THEN
+        -- 使用 CASE WHEN 語句來更新欄位
+        UPDATE "USER"
+        SET name = COALESCE(P_NAME, name),
+            role = COALESCE(P_ROLE, role),
+            updated_at = COALESCE(P_UPDATED_AT, CURRENT_TIMESTAMP)
+        WHERE LOWER(email) = LOWER(P_EMAIL);
+        
+        RAISE NOTICE '已更新使用者 % 姓名:% 角色:%.', P_EMAIL, COALESCE(P_NAME, '未變更'), COALESCE(P_ROLE, '未變更');
+    ELSE
+        RAISE NOTICE '使用者 % 不存在.', P_EMAIL;
+    END IF;
+END;
+$$;
+-- 刪除使用者資料的 SP - 以 email 判斷
+CREATE OR REPLACE PROCEDURE DELETE_USER_BY_EMAIL(
+    IN P_EMAIL VARCHAR(320)
+)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    -- 檢查 email 是否存在
+    IF EXISTS (SELECT 1 FROM "USER" WHERE LOWER(email) = LOWER(P_EMAIL)) THEN
+        -- 使用 email 判斷是否有需要刪除的資料
+        DELETE FROM "USER" WHERE LOWER(email) = LOWER(P_EMAIL);
+        RAISE NOTICE '已刪除使用者 % ', P_EMAIL;
+    ELSE
+        RAISE NOTICE '使用者 % 不存在.', P_EMAIL;
+    END IF;
+END;
+$$;
 -- 1. 新增：新增六筆用戶資料，資料如下：
 --     1. 用戶名稱為`李燕容`，Email 為`lee2000@hexschooltest.io`，Role為`USER`
 --     2. 用戶名稱為`王小明`，Email 為`wXlTq@hexschooltest.io`，Role為`USER`
@@ -14,15 +87,25 @@
 --     4. 用戶名稱為`好野人`，Email 為`richman@hexschooltest.io`，Role為`USER`
 --     5. 用戶名稱為`Q太郎`，Email 為`starplatinum@hexschooltest.io`，Role為`USER`
 --     6. 用戶名稱為 透明人，Email 為 opacity0@hexschooltest.io，Role 為 USER
+CALL ADD_USER_WITH_EMAIL_CHECK('李燕容', 'lee2000@hexschooltest.io', 'USER');
+CALL ADD_USER_WITH_EMAIL_CHECK('王小明', 'wXlTq@hexschooltest.io', 'USER');
+CALL ADD_USER_WITH_EMAIL_CHECK('肌肉棒子', 'muscle@hexschooltest.io', 'USER');
+CALL ADD_USER_WITH_EMAIL_CHECK('好野人', 'richman@hexschooltest.io', 'USER');
+CALL ADD_USER_WITH_EMAIL_CHECK('Q太郎', 'starplatinum@hexschooltest.io', 'USER');
+CALL ADD_USER_WITH_EMAIL_CHECK('透明人', 'opacity0@hexschooltest.io', 'USER');
 
 -- 1-2 修改：用 Email 找到 李燕容、肌肉棒子、Q太郎，如果他的 Role 為 USER 將他的 Role 改為 COACH
+CALL UPDATE_USER_BY_EMAIL('lee2000@hexschooltest.io', null, 'COACH');
+CALL UPDATE_USER_BY_EMAIL('muscle@hexschooltest.io', null, 'COACH');
+CALL UPDATE_USER_BY_EMAIL('starplatinum@hexschooltest.io', null, 'COACH');
 
 -- 1-3 刪除：刪除USER 資料表中，用 Email 找到透明人，並刪除該筆資料
-
+CALL DELETE_USER_BY_EMAIL('opacity0@hexschooltest.io');
 -- 1-4 查詢：取得USER 資料表目前所有用戶數量（提示：使用count函式）
-
+SELECT COUNT(*) AS 用戶數量 FROM "USER";
 -- 1-5 查詢：取得 USER 資料表所有用戶資料，並列出前 3 筆（提示：使用limit語法）
-
+SELECT * FROM "USER"
+LIMIT 3;
 
 --  ████████  █████   █    ████  
 --    █ █   ██    █  █         █ 
