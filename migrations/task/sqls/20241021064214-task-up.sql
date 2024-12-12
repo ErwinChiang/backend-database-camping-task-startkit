@@ -473,6 +473,311 @@ CALL ADD_COURSE_BY_COACH_EMAIL('lee2000@hexschooltest.io', '重訓', '重訓基�
 -- ===================== ====================
 
 -- 5. 客戶預約與授課 COURSE_BOOKING
+--增加預約課程的 SP
+CREATE
+OR REPLACE PROCEDURE ADD_COURSE_BOOKING_BY_USER_EMAIL (
+    IN P_EMAIL VARCHAR(50),
+    IN P_COACH_NAME VARCHAR(50),
+    IN P_COURSE_NAME VARCHAR(100),
+    IN P_COURSE_START_AT TIMESTAMP,
+    IN P_BOOKING_AT TIMESTAMP
+) LANGUAGE PLPGSQL AS $$
+DECLARE
+    v_user_id uuid;
+    v_user_name varchar(50);
+    v_course_id integer;
+    v_course_name varchar(100);
+BEGIN
+    -- 檢查 該使用者EMAIL是否存在
+    IF EXISTS (SELECT 1 FROM "USER" WHERE LOWER(email) = LOWER(P_EMAIL)) THEN
+        -- 取得使用者id
+        SELECT id, name INTO v_user_id, v_user_name FROM "USER" WHERE LOWER(email) = LOWER(P_EMAIL);
+    ELSE
+        RAISE NOTICE '不存在: %', P_EMAIL;
+        RETURN;
+    END IF;
+    
+    --檢查課程狀態
+    IF (SELECT COUNT(1) FROM GET_COURSES_BY_COACH_NAME_AND_START_AT(P_COACH_NAME, P_COURSE_NAME, P_COURSE_START_AT)) > 1 THEN
+        RAISE NOTICE '超過一門課，請增加條件。 教練: % 課程: % 預約時間: %', P_COACH_NAME, P_COURSE_NAME, P_BOOKING_AT;
+        RETURN;
+    END IF;
+    
+    --檢查是否存在開課
+    IF EXISTS (SELECT 1 FROM GET_COURSES_BY_COACH_NAME_AND_START_AT(P_COACH_NAME, P_COURSE_NAME, P_COURSE_START_AT)) THEN
+        SELECT course_id, course_name INTO v_course_id, v_course_name FROM GET_COURSES_BY_COACH_NAME_AND_START_AT(P_COACH_NAME, P_COURSE_NAME, P_COURSE_START_AT);
+    ELSE
+        RAISE NOTICE '無此課程, 教練: % 課程: % 預約時間: %', P_COACH_NAME, v_course_name, P_BOOKING_AT;
+        RETURN;
+    END IF;
+    
+    --檢查是否已預約
+    IF EXISTS (SELECT 1 FROM "COURSE_BOOKING" WHERE user_id = v_user_id and course_id = v_course_id and booking_at IS NOT NULL and cancel_at IS NULL) THEN
+        RAISE NOTICE '% => 該課程已預約, 教練: % 課程: % 課程時間: %', v_user_name, P_COACH_NAME, v_course_name, P_COURSE_START_AT;
+        RETURN;
+    END IF;
+    
+    -- 新增預約
+    INSERT INTO "COURSE_BOOKING" (user_id, course_id, booking_at, status, join_at, leave_at, cancel_at, cancellation_reason)
+    VALUES(v_user_id, v_course_id, P_BOOKING_AT, '即將授課', NULL, NULL, NULL, NULL);
+    RAISE NOTICE '% => 預約課程成功: % 開始於: % 教練: % 預約成功時間: %',v_user_name, v_course_name, P_COURSE_START_AT, P_COACH_NAME, P_BOOKING_AT;
+END;
+$$;
+-- 增加取消預約課程的 SP
+CREATE
+OR REPLACE PROCEDURE CANCEL_COURSE_BOOKING_BY_USER_EMAIL (
+    IN P_EMAIL VARCHAR(50),
+    IN P_COACH_NAME VARCHAR(50),
+    IN P_COURSE_NAME VARCHAR(100),
+    IN P_COURSE_START_AT TIMESTAMP,
+    IN P_CANCEL_AT TIMESTAMP,
+    IN P_CANCELLATION_REASON VARCHAR(255)
+) LANGUAGE PLPGSQL AS $$
+DECLARE
+    v_user_id uuid;
+    v_user_name varchar(50);
+    v_course_id integer;
+    v_course_name varchar(100);
+BEGIN
+    -- 檢查 該使用者EMAIL是否存在
+    IF EXISTS (SELECT 1 FROM "USER" WHERE LOWER(email) = LOWER(P_EMAIL)) THEN
+        -- 取得使用者id
+        SELECT id, name INTO v_user_id, v_user_name FROM "USER" WHERE LOWER(email) = LOWER(P_EMAIL);
+    ELSE
+        RAISE NOTICE '不存在: %', P_EMAIL;
+        RETURN;
+    END IF;
+    
+    --檢查課程狀態
+    IF (SELECT COUNT(1) FROM GET_COURSES_BY_COACH_NAME_AND_START_AT(P_COACH_NAME, P_COURSE_NAME, P_COURSE_START_AT)) > 1 THEN
+        RAISE NOTICE '超過一門課，請增加條件。 教練: % 課程: % 預約時間: %', P_COACH_NAME, P_COURSE_NAME, P_BOOKING_AT;
+        RETURN;
+    END IF;
+    
+    --檢查是否存在開課
+    IF EXISTS (SELECT 1 FROM GET_COURSES_BY_COACH_NAME_AND_START_AT(P_COACH_NAME, P_COURSE_NAME, P_COURSE_START_AT)) THEN
+        SELECT course_id, course_name INTO v_course_id, v_course_name FROM GET_COURSES_BY_COACH_NAME_AND_START_AT(P_COACH_NAME, P_COURSE_NAME, P_COURSE_START_AT);
+    ELSE
+        RAISE NOTICE '無此課程, 教練: % 課程: % 預約時間: %', P_COACH_NAME, v_course_name, P_BOOKING_AT;
+        RETURN;
+    END IF;
+    
+    --檢查是否已預約
+    IF NOT EXISTS (SELECT 1 FROM "COURSE_BOOKING" WHERE user_id = v_user_id and course_id = v_course_id and booking_at IS NOT NULL and cancel_at IS NULL) THEN
+        RAISE NOTICE '% => 尚未預約課程, 教練: % 課程: % 課程時間: %', v_user_name, P_COACH_NAME, v_course_name, P_COURSE_START_AT;
+        RETURN;
+    END IF;
+    
+    -- 取消預約
+    IF NOT EXISTS (SELECT 1 FROM "COURSE_BOOKING" WHERE user_id = v_user_id and course_id = v_course_id and booking_at IS NOT NULL AND status IN ('即將授課')) THEN
+        RAISE NOTICE '沒有可以取消預約的課程';
+        RETURN;
+    END IF;
+    
+    UPDATE "COURSE_BOOKING"
+    SET status = '課程已取消',
+        cancel_at = P_CANCEL_AT,
+        cancellation_reason = P_CANCELLATION_REASON
+    WHERE user_id = v_user_id and course_id = v_course_id and booking_at IS NOT NULL AND status IN ('即將授課');
+    RAISE NOTICE '% => 已取消預約: % 開始於: % 教練: % 取消時間: % 取消原因: %',v_user_name, v_course_name, P_COURSE_START_AT, P_COACH_NAME, P_CANCEL_AT, P_CANCELLATION_REASON;
+END;
+$$;
+-- 增加進入課程的 SP
+CREATE
+OR REPLACE PROCEDURE JOIN_COURSE_BOOKING_BY_USER_EMAIL (
+    IN P_EMAIL VARCHAR(50),
+    IN P_COACH_NAME VARCHAR(50),
+    IN P_COURSE_NAME VARCHAR(100),
+    IN P_COURSE_START_AT TIMESTAMP,
+    IN P_JOIN_AT TIMESTAMP
+) LANGUAGE PLPGSQL AS $$
+DECLARE
+    v_user_id uuid;
+    v_user_name varchar(50);
+    v_course_id integer;
+    v_course_name varchar(100);
+    v_course_start_at timestamp;
+    v_course_end_at timestamp;
+BEGIN
+    -- 檢查 該使用者EMAIL是否存在
+    IF EXISTS (SELECT 1 FROM "USER" WHERE LOWER(email) = LOWER(P_EMAIL)) THEN
+        -- 取得使用者id
+        SELECT id, name INTO v_user_id, v_user_name FROM "USER" WHERE LOWER(email) = LOWER(P_EMAIL);
+    ELSE
+        RAISE NOTICE '不存在: %', P_EMAIL;
+        RETURN;
+    END IF;
+    
+    --檢查課程狀態
+    IF (SELECT COUNT(1) FROM GET_COURSES_BY_COACH_NAME_AND_START_AT(P_COACH_NAME, P_COURSE_NAME, P_COURSE_START_AT)) > 1 THEN
+        RAISE NOTICE '超過一門課，請增加條件。 教練: % 課程: % 預約時間: %', P_COACH_NAME, P_COURSE_NAME, P_BOOKING_AT;
+        RETURN;
+    END IF;
+    
+    --檢查是否存在開課
+    IF EXISTS (SELECT 1 FROM GET_COURSES_BY_COACH_NAME_AND_START_AT(P_COACH_NAME, P_COURSE_NAME, P_COURSE_START_AT)) THEN
+        SELECT course_id, course_name, start_at, end_at
+        INTO v_course_id, v_course_name, v_course_start_at, v_course_end_at
+        FROM GET_COURSES_BY_COACH_NAME_AND_START_AT(P_COACH_NAME, P_COURSE_NAME, P_COURSE_START_AT);
+    ELSE
+        RAISE NOTICE '無此課程, 教練: % 課程: % 預約時間: %', P_COACH_NAME, v_course_name, P_BOOKING_AT;
+        RETURN;
+    END IF;
+    
+    --檢查是否已預約
+    IF NOT EXISTS (SELECT 1 FROM "COURSE_BOOKING" WHERE user_id = v_user_id and course_id = v_course_id and booking_at IS NOT NULL and cancel_at IS NULL) THEN
+        RAISE NOTICE '尚未預約課程, 教練: % 課程: % 課程時間: %', P_COACH_NAME, v_course_name, P_COURSE_START_AT;
+        RETURN;
+    END IF;
+    
+    -- 開課時間檢查
+    IF NOT (P_JOIN_AT BETWEEN v_course_start_at AND v_course_end_at) THEN
+        RAISE NOTICE '不是上課時間!!';
+        RETURN;
+    END IF;
+    
+    -- 遲到檢查
+    IF ((P_JOIN_AT - P_COURSE_START_AT) > '30 minutes'::INTERVAL) THEN
+        RAISE NOTICE '遲到 30 分鐘還想進來!??';
+        RETURN;
+    END IF;
+    
+    -- 加入課程
+    UPDATE "COURSE_BOOKING"
+    SET status = '上課中',
+        join_at = P_JOIN_AT
+    WHERE user_id = v_user_id and course_id = v_course_id
+      and booking_at IS NOT NULL
+      and cancel_at IS NULL
+      and join_at IS NULL;
+    RAISE NOTICE '% => 上課中: % 開始於: % 教練: %',v_user_name, P_JOIN_AT, P_COURSE_START_AT, P_COACH_NAME;
+END;
+$$;
+-- 建立使用教練名稱查詢課程的function
+CREATE OR REPLACE FUNCTION GET_COURSES_BY_COACH_NAME_AND_START_AT(
+    P_COACH_NAME VARCHAR,
+    P_COURSE_NAME VARCHAR,
+    P_COURSE_START_AT TIMESTAMP
+) RETURNS TABLE (
+    course_id INTEGER,
+    coach_name VARCHAR,
+    course_name VARCHAR,
+    start_at TIMESTAMP,
+    end_at TIMESTAMP,
+    max_participants INTEGER,
+    meeting_url VARCHAR
+) AS $$
+BEGIN
+RETURN QUERY
+SELECT
+    "COURSE".id,
+    "USER".name AS coach_name,
+    "COURSE".name AS course_name,
+    "COURSE".start_at,
+    "COURSE".end_at,
+    "COURSE".max_participants,
+    "COURSE".meeting_url
+FROM "COURSE"
+LEFT JOIN "USER" ON "COURSE".user_id = "USER".id AND "USER".role = 'COACH'
+WHERE LOWER("USER".name) = LOWER(P_COACH_NAME)
+AND (LOWER("COURSE".name) = LOWER(P_COURSE_NAME) OR P_COURSE_NAME IS NULL)
+AND ("COURSE".start_at = P_COURSE_START_AT OR P_COURSE_START_AT IS NULL);
+END;
+$$ LANGUAGE plpgsql;
+-- 建立使用使用者EMAIL查詢所有預約紀錄的function
+CREATE OR REPLACE FUNCTION GET_COURSES_BOOKING_BY_USER_EMAIL(
+    P_USER_EMAIL VARCHAR(320)
+) RETURNS TABLE (
+    user_name VARCHAR(50),
+    email VARCHAR(320),
+    course_name VARCHAR(100),
+    start_at TIMESTAMP,
+    booking_at TIMESTAMP,
+    status VARCHAR(20),
+    join_at TIMESTAMP,
+    leave_at TIMESTAMP,
+    cancel_at TIMESTAMP,
+    cancellation_reason VARCHAR
+) AS $$
+BEGIN
+RETURN QUERY
+SELECT
+    "USER".name,
+    "USER".email,
+    "COURSE".name,
+    "COURSE".start_at,
+    "COURSE_BOOKING".booking_at,
+    "COURSE_BOOKING".status,
+    "COURSE_BOOKING".join_at,
+    "COURSE_BOOKING".leave_at,
+    "COURSE_BOOKING".cancel_at,
+    "COURSE_BOOKING".cancellation_reason
+FROM "USER"
+LEFT JOIN "COURSE_BOOKING" ON "USER".id = "COURSE_BOOKING".user_id
+JOIN "COURSE" ON "COURSE".id = "COURSE_BOOKING".course_id
+WHERE "USER".Email = P_USER_EMAIL OR P_USER_EMAIL IS NULL;
+END;
+$$ LANGUAGE plpgsql;
+-- 建立以EMAIL查詢課程購買數量的function
+CREATE OR REPLACE FUNCTION GET_PURCHASED_CREDITS_BY_USER_EMAIL(
+    P_USER_EMAIL VARCHAR(320) DEFAULT NULL
+) RETURNS TABLE (
+    user_id uuid,
+    user_name varchar(50),
+    purchased_credits_total Integer
+) AS $$
+BEGIN
+RETURN QUERY
+SELECT "USER".id as user_id, "USER".name as user_name, SUM(purchased_credits)::integer as purchased_credits_total
+FROM "USER"
+JOIN "CREDIT_PURCHASE"
+ON "CREDIT_PURCHASE".user_id = "USER".id
+WHERE "USER".email = P_USER_EMAIL OR P_USER_EMAIL IS NULL
+GROUP BY "USER".id, "USER".name;
+END;
+$$ LANGUAGE plpgsql;
+-- 建立以EMAIL查詢課程已使用數量的function
+CREATE OR REPLACE FUNCTION GET_USED_CREDITS_BY_USER_EMAIL(
+    P_USER_EMAIL VARCHAR(320) DEFAULT NULL
+) RETURNS TABLE (
+    user_id uuid,
+    user_name varchar(50),
+    used_credit_total Integer
+) AS $$
+BEGIN
+RETURN QUERY
+SELECT "USER".id as user_id, "USER".name, COUNT(1)::INTEGER as used_credit_total
+FROM "USER"
+JOIN "COURSE_BOOKING"
+ON "COURSE_BOOKING".user_id = "USER".id
+AND "COURSE_BOOKING".cancel_at IS NULL
+WHERE "USER".email = P_USER_EMAIL OR P_USER_EMAIL IS NULL
+GROUP BY "USER".id, "USER".name;
+END;
+$$ LANGUAGE plpgsql;
+-- 建立以EMAIL查詢課程剩餘數量的function
+CREATE OR REPLACE FUNCTION GET_REMAINING_CREDITS_BY_USER_EMAIL(
+    P_USER_EMAIL VARCHAR(320) DEFAULT NULL
+) RETURNS TABLE (
+    user_id uuid,
+    user_name varchar(50),
+    purchased_credits_total Integer,
+    used_credit_total Integer,
+    remaining_credit Integer
+) AS $$
+BEGIN
+RETURN QUERY
+SELECT
+    p.user_id as user_id,
+    p.user_name as user_name,
+    p.purchased_credits_total as purchased_credits_total,
+    u.used_credit_total as used_credits_total,
+    p.purchased_credits_total - u.used_credit_total as remaining_credit
+FROM GET_PURCHASED_CREDITS_BY_USER_EMAIL(P_USER_EMAIL) p
+LEFT JOIN GET_USED_CREDITS_BY_USER_EMAIL(P_USER_EMAIL) u
+ON p.user_id = u.user_id;
+END;
+$$ LANGUAGE plpgsql;
 -- 5-1. 新增：請在 `COURSE_BOOKING` 新增兩筆資料：
     -- 1. 第一筆：`王小明`預約 `李燕容` 的課程
         -- 1. 預約人設為`王小明`
@@ -482,25 +787,36 @@ CALL ADD_COURSE_BY_COACH_EMAIL('lee2000@hexschooltest.io', '重訓', '重訓基�
         -- 1. 預約人設為 `好野人`
         -- 2. 預約時間`booking_at` 設為2024-11-24 16:00:00
         -- 3. 狀態`status` 設定為即將授課
-
+--王小明 booking
+CALL ADD_COURSE_BOOKING_BY_USER_EMAIL('wXlTq@hexschooltest.io', '李燕容', '重訓基礎課', '2024-11-25 14:00:00'::timestamp, '2024-11-24 16:00:00'::timestamp);
+--好野人
+CALL ADD_COURSE_BOOKING_BY_USER_EMAIL('richman@hexschooltest.io', '李燕容', '重訓基礎課', '2024-11-25 14:00:00'::timestamp, '2024-11-24 16:00:00'::timestamp);
 -- 5-2. 修改：`王小明`取消預約 `李燕容` 的課程，請在`COURSE_BOOKING`更新該筆預約資料：
     -- 1. 取消預約時間`cancelled_at` 設為2024-11-24 17:00:00
     -- 2. 狀態`status` 設定為課程已取消
+--王小明很皮，明天肚子痛，取消預約
+CALL CANCEL_COURSE_BOOKING_BY_USER_EMAIL('wXlTq@hexschooltest.io', '李燕容', '重訓基礎課', '2024-11-25 14:00:00'::timestamp, '2024-11-24 17:00:00'::timestamp,'王小明很皮，明天會肚子痛');
 
 -- 5-3. 新增：`王小明`再次預約 `李燕容`   的課程，請在`COURSE_BOOKING`新增一筆資料：
     -- 1. 預約人設為`王小明`
     -- 2. 預約時間`booking_at` 設為2024-11-24 17:10:25
     -- 3. 狀態`status` 設定為即將授課
+--王小明很皮，忽然明天又不會肚子痛了
+CALL ADD_COURSE_BOOKING_BY_USER_EMAIL('wXlTq@hexschooltest.io', '李燕容', '重訓基礎課', '2024-11-25 14:00:00'::timestamp, '2024-11-24 17:10:25'::timestamp);
 
 -- 5-4. 查詢：取得王小明所有的預約紀錄，包含取消預約的紀錄
+SELECT * FROM GET_COURSES_BOOKING_BY_USER_EMAIL('wXlTq@hexschooltest.io');
 
 -- 5-5. 修改：`王小明` 現在已經加入直播室了，請在`COURSE_BOOKING`更新該筆預約資料（請注意，不要更新到已經取消的紀錄）：
     -- 1. 請在該筆預約記錄他的加入直播室時間 `join_at` 設為2024-11-25 14:01:59
     -- 2. 狀態`status` 設定為上課中
+CALL JOIN_COURSE_BOOKING_BY_USER_EMAIL('wXlTq@hexschooltest.io', '李燕容', '重訓基礎課', '2024-11-25 14:00:00'::timestamp, '2024-11-25 14:01:59'::timestamp);
 
 -- 5-6. 查詢：計算用戶王小明的購買堂數，顯示須包含以下欄位： user_id , total。 (需使用到 SUM 函式與 Group By)
+SELECT * FROM GET_PURCHASED_CREDITS_BY_USER_EMAIL('wXlTq@hexschooltest.io');
 
 -- 5-7. 查詢：計算用戶王小明的已使用堂數，顯示須包含以下欄位： user_id , total。 (需使用到 Count 函式與 Group By)
+SELECT * FROM GET_USED_CREDITS_BY_USER_EMAIL('wXlTq@hexschooltest.io');
 
 -- 5-8. [挑戰題] 查詢：請在一次查詢中，計算用戶王小明的剩餘可用堂數，顯示須包含以下欄位： user_id , remaining_credit
     -- 提示：
@@ -508,7 +824,7 @@ CALL ADD_COURSE_BY_COACH_EMAIL('lee2000@hexschooltest.io', '重訓', '重訓基�
     -- from ( 用戶王小明的購買堂數 ) as "CREDIT_PURCHASE"
     -- inner join ( 用戶王小明的已使用堂數) as "COURSE_BOOKING"
     -- on "COURSE_BOOKING".user_id = "CREDIT_PURCHASE".user_id;
-
+SELECT * FROM GET_REMAINING_CREDITS_BY_USER_EMAIL('wXlTq@hexschooltest.io');
 
 -- ████████  █████   █     ███  
 --   █ █   ██    █  █     █     
